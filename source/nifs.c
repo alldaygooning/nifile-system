@@ -1,8 +1,14 @@
 #include "nifs.h"
 
-#include <linux/dcache.h>
-#include <linux/fs.h>
 #include <linux/printk.h>
+
+static struct dentry* nifs_lookup(
+    struct inode* parent_inode, struct dentry* child_dentry, unsigned int flag
+);
+
+static struct inode* nifs_get_inode(
+    struct super_block* sb, const struct inode* dir, umode_t mode, int i_ino
+);
 
 static int nifs_iterate(struct file* filp, struct dir_context* ctx) {
   char name[16];
@@ -44,15 +50,6 @@ static const struct file_operations nifs_dir_operations = {
     .iterate_shared = nifs_iterate,
 };
 
-static struct dentry* nifs_lookup(
-    struct inode* parent_inode,  // родительская нода
-    struct dentry* child_dentry,  // объект, к которому мы пытаемся получить доступ
-    unsigned int flag  // неиспользуемое значение
-) {
-  d_add(child_dentry, NULL);
-  return NULL;
-}
-
 struct inode_operations nifs_inode_ops = {
     .lookup = nifs_lookup,
 };
@@ -72,6 +69,26 @@ static struct inode* nifs_get_inode(
     inode->i_fop = &nifs_dir_operations;
   }
   return inode;
+}
+
+static struct dentry* nifs_lookup(
+    struct inode* parent_inode,  // родительская нода
+    struct dentry* child_dentry,  // объект, к которому мы пытаемся получить доступ
+    unsigned int flag  // неиспользуемое значение
+) {
+  ino_t root = parent_inode->i_ino;
+  const char* name = child_dentry->d_name.name;
+
+  if (root == 1000 && !strcmp(name, "test.txt")) {
+    struct inode* inode = nifs_get_inode(parent_inode->i_sb, NULL, S_IFREG, 101);
+    d_add(child_dentry, inode);
+  } else if (root == 1000 && !strcmp(name, "dir")) {
+    struct inode* inode = nifs_get_inode(parent_inode->i_sb, NULL, S_IFDIR, 200);
+    d_add(child_dentry, inode);
+  } else {
+    d_add(child_dentry, NULL);
+  }
+  return NULL;
 }
 
 static int nifs_fill_super(struct super_block* sb, void* data, int silent) {
