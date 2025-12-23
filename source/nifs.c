@@ -17,7 +17,7 @@ static int nifs_iterate(struct file* filp, struct dir_context* ctx) {
   loff_t pos = ctx->pos;
 
   if (pos == 0) {
-    if (!dir_emit(ctx, ".", 1, inode->i_ino, DT_DIR)) {
+    if (!dir_emit(ctx, NIFS_DOT_ENTRY, 1, inode->i_ino, DT_DIR)) {
       return 0;
     }
     ctx->pos = 1;
@@ -27,7 +27,7 @@ static int nifs_iterate(struct file* filp, struct dir_context* ctx) {
   if (pos == 1) {
     struct dentry* parent = dentry->d_parent;
     struct inode* parent_inode = parent->d_inode;
-    if (!dir_emit(ctx, "..", 2, parent_inode->i_ino, DT_DIR)) {
+    if (!dir_emit(ctx, NIFS_DOTDOT_ENTRY, 2, parent_inode->i_ino, DT_DIR)) {
       return 0;
     }
     ctx->pos = 2;
@@ -35,8 +35,8 @@ static int nifs_iterate(struct file* filp, struct dir_context* ctx) {
   }
 
   if (pos == 2) {
-    strcpy(name, "test.txt");
-    if (!dir_emit(ctx, name, strlen(name), 101, DT_REG)) {
+    strcpy(name, NIFS_TESTFILE_NAME);
+    if (!dir_emit(ctx, name, strlen(name), NIFS_TESTFILE_INODE, DT_REG)) {
       return 0;
     }
     ctx->pos = 3;
@@ -79,11 +79,11 @@ static struct dentry* nifs_lookup(
   ino_t root = parent_inode->i_ino;
   const char* name = child_dentry->d_name.name;
 
-  if (root == 1000 && !strcmp(name, "test.txt")) {
-    struct inode* inode = nifs_get_inode(parent_inode->i_sb, NULL, S_IFREG, 101);
+  if (root == NIFS_ROOT_INODE && !strcmp(name, NIFS_TESTFILE_NAME)) {
+    struct inode* inode = nifs_get_inode(parent_inode->i_sb, NULL, S_IFREG, NIFS_TESTFILE_INODE);
     d_add(child_dentry, inode);
-  } else if (root == 1000 && !strcmp(name, "dir")) {
-    struct inode* inode = nifs_get_inode(parent_inode->i_sb, NULL, S_IFDIR, 200);
+  } else if (root == NIFS_ROOT_INODE && !strcmp(name, NIFS_DIR_NAME)) {
+    struct inode* inode = nifs_get_inode(parent_inode->i_sb, NULL, S_IFDIR, NIFS_DIR_INODE);
     d_add(child_dentry, inode);
   } else {
     d_add(child_dentry, NULL);
@@ -92,7 +92,7 @@ static struct dentry* nifs_lookup(
 }
 
 static int nifs_fill_super(struct super_block* sb, void* data, int silent) {
-  struct inode* inode = nifs_get_inode(sb, NULL, S_IFDIR, 1000);
+  struct inode* inode = nifs_get_inode(sb, NULL, S_IFDIR, NIFS_ROOT_INODE);
 
   sb->s_root = d_make_root(inode);
   if (sb->s_root == NULL) {
