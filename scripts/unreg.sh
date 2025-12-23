@@ -1,3 +1,3 @@
 #!/bin/bash
 rmmod nifs
-dmesg | tail -4
+dmesg | tail -2
