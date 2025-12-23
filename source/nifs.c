@@ -11,5 +11,5 @@ static void __exit nifs_exit(void) {
   LOG("NIFS left the kernel\n");
 }
 
-module_init(nifs_init);
-module_exit(nifs_exit);
+module_init(nifs_init); // NOLINT
+module_exit(nifs_exit); // NOLINT
