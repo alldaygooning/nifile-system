@@ -4,10 +4,17 @@
 
 // ====== CREATED FILES TRACKING ======
 
+struct nifs_file_data {
+  char* data;
+  size_t size;
+  size_t capacity;
+};
+
 struct nifs_file_entry {
-  char* name;             // File name
-  int inode_number;       // Inode number
-  struct list_head list;  // Linux kernel list node
+  char* name;                   // File name
+  int inode_number;             // Inode number
+  struct nifs_file_data* data;  // Pointer to file data
+  struct list_head list;        // Linux kernel list node
 };
 static LIST_HEAD(nifs_file_list);
 static int nifs_next_inode = NIFS_NEXT_INODE;
@@ -18,11 +25,19 @@ static struct dentry* nifs_lookup(
     struct inode* parent_inode, struct dentry* child_dentry, unsigned int flag
 );
 
+static struct nifs_file_data* nifs_alloc_file_data(void);
+
+static void nifs_free_file_data(struct nifs_file_data* fd);
+
 static int nifs_create(struct mnt_idmap*, struct inode*, struct dentry*, umode_t, bool);
 
 static int nifs_unlink(struct inode* parent_inode, struct dentry* child_dentry);
 
 static int nifs_iterate(struct file* filp, struct dir_context* ctx);
+
+static ssize_t nifs_read(struct file* filp, char __user* buf, size_t len, loff_t* pos);
+
+static ssize_t nifs_write(struct file* filp, const char __user* buf, size_t len, loff_t* pos);
 
 struct inode_operations nifs_inode_ops = {
     .lookup = nifs_lookup,
@@ -33,6 +48,14 @@ struct inode_operations nifs_inode_ops = {
 static const struct file_operations nifs_dir_operations = {
     .owner = THIS_MODULE,
     .iterate_shared = nifs_iterate,
+};
+
+static const struct file_operations nifs_file_operations = {
+    .owner = THIS_MODULE,
+    .read = nifs_read,
+    .write = nifs_write,
+    .llseek = generic_file_llseek,
+    .open = simple_open,
 };
 
 static struct inode* nifs_get_inode(
@@ -48,11 +71,14 @@ static struct inode* nifs_get_inode(
   if (S_ISDIR(mode)) {
     inode->i_op = &nifs_inode_ops;
     inode->i_fop = &nifs_dir_operations;
+  } else if (S_ISREG(mode)) {
+    inode->i_op = &nifs_inode_ops;
+    inode->i_fop = &nifs_file_operations;
   }
   return inode;
 }
 
-// ====== FILE MANAGEMENT =======
+// ====== FILE MANAGEMENT ======
 
 static int nifs_create(
     struct mnt_idmap* idmap,
@@ -88,7 +114,10 @@ static int nifs_create(
   }
 
   new_entry->name = kmalloc(strlen(name) + 1, GFP_KERNEL /*GET FREE PAGES*/);
-  if (!new_entry->name) {
+  new_entry->data = nifs_alloc_file_data();
+  if (!new_entry->name || !new_entry->data) {
+    nifs_free_file_data(new_entry->data);
+    kfree(new_entry->name);
     kfree(new_entry);
     return -ENOMEM;
   }
@@ -103,13 +132,14 @@ static int nifs_create(
   if (!inode) {
     // Clean up on error!!!
     list_del(&new_entry->list);
+    nifs_free_file_data(new_entry->data);
     kfree(new_entry->name);
     kfree(new_entry);
     return -ENOMEM;
   }
 
   inode->i_op = &nifs_inode_ops;
-  inode->i_fop = NULL;
+  inode->i_fop = &nifs_file_operations;
 
   d_add(child_dentry, inode);
   LOG("Created file: %s (inode %d)\n", name, new_entry->inode_number);
@@ -137,6 +167,7 @@ static int nifs_unlink(struct inode* parent_inode, struct dentry* child_dentry) 
     if (!strcmp(name, file_entry->name)) {
       LOG("Removing file: %s (inode %d)\n", name, file_entry->inode_number);
       list_del(&file_entry->list);
+      nifs_free_file_data(file_entry->data);
       kfree(file_entry->name);
       kfree(file_entry);
       return 0;
@@ -147,7 +178,107 @@ static int nifs_unlink(struct inode* parent_inode, struct dentry* child_dentry) 
   return -ENOENT;
 }
 
-// ====== =============== =======
+// ====== =============== ======
+
+// ====== FILE DATA MANAGEMENT ======
+
+static struct nifs_file_data* nifs_alloc_file_data(void) {
+  struct nifs_file_data* fd = kmalloc(sizeof(struct nifs_file_data), GFP_KERNEL);
+  if (!fd) {
+    return NULL;
+  }
+
+  fd->size = 0;
+  fd->capacity = 0;
+  fd->data = NULL;
+  return fd;
+}
+
+static int nifs_resize_file_data(struct nifs_file_data* fd, size_t new_size) {
+  if (new_size <= fd->capacity) {
+    fd->size = new_size;
+    return 0;
+  }
+
+  size_t new_capacity = new_size;
+  char* new_data = krealloc(fd->data, new_capacity, GFP_KERNEL);
+  if (!new_data) {
+    return -ENOMEM;
+  }
+
+  fd->data = new_data;
+  fd->capacity = new_capacity;
+
+  size_t old_size = fd->size;
+  fd->size = new_size;
+
+  if (new_size > old_size) {
+    memset(fd->data + old_size, 0, new_size - old_size);
+  }
+
+  return 0;
+}
+
+static void nifs_free_file_data(struct nifs_file_data* fd) {
+  if (fd) {
+    kfree(fd->data);
+    kfree(fd);
+  }
+}
+
+// ====== ==================== ======
+
+// ====== FILE OPERATIONS ======
+
+static ssize_t nifs_read(struct file* filp, char __user* buf, size_t len, loff_t* pos) {
+  struct inode* inode = file_inode(filp);
+  struct nifs_file_entry* entry;
+
+  list_for_each_entry(entry, &nifs_file_list, list) {
+    if (entry->inode_number == inode->i_ino) {
+      if (*pos >= entry->data->size) {
+        return 0;  // EOF
+      }
+
+      size_t to_read = min(len, entry->data->size - *pos);
+      if (copy_to_user(buf, entry->data->data + *pos, to_read)) {
+        return -EFAULT;
+      }
+
+      *pos += to_read;
+      return to_read;
+    }
+  }
+
+  return -ENOENT;
+}
+
+static ssize_t nifs_write(struct file* filp, const char __user* buf, size_t len, loff_t* pos) {
+  struct inode* inode = file_inode(filp);
+  struct nifs_file_entry* entry;
+  int ret;
+
+  list_for_each_entry(entry, &nifs_file_list, list) {
+    if (entry->inode_number == inode->i_ino) {
+      size_t new_size = *pos + len;
+
+      ret = nifs_resize_file_data(entry->data, new_size);
+      if (ret)
+        return ret;
+
+      if (copy_from_user(entry->data->data + *pos, buf, len)) {
+        return -EFAULT;
+      }
+
+      *pos += len;
+      return len;
+    }
+  }
+
+  return -ENOENT;
+}
+
+// ====== =============== ======
 
 static int nifs_iterate(struct file* filp, struct dir_context* ctx) {
   struct dentry* dentry = filp->f_path.dentry;
@@ -270,6 +401,7 @@ static void nifs_kill_sb(struct super_block* sb) {
 
   list_for_each_entry_safe(file_entry, tmp, &nifs_file_list, list) {
     list_del(&file_entry->list);
+    nifs_free_file_data(file_entry->data);
     kfree(file_entry->name);
     kfree(file_entry);
   }
