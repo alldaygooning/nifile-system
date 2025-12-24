@@ -95,11 +95,6 @@ static int nifs_create(
     return -EPERM;
   }
 
-  // Prevent duplicate creation of "test.txt"
-  if (!strcmp(name, NIFS_TESTFILE_NAME)) {
-    return 0;
-  }
-
   struct nifs_file_entry* file_entry;
   list_for_each_entry(file_entry, &nifs_file_list, list) {
     if (!strcmp(name, file_entry->name)) {
@@ -152,11 +147,6 @@ static int nifs_unlink(struct inode* parent_inode, struct dentry* child_dentry) 
 
   // Disable unlinking outside root directory
   if (root != NIFS_ROOT_INODE) {
-    return -EPERM;
-  }
-
-  // Don't allow removing "test.txt"
-  if (!strcmp(name, NIFS_TESTFILE_NAME)) {
     return -EPERM;
   }
 
@@ -306,27 +296,16 @@ static int nifs_iterate(struct file* filp, struct dir_context* ctx) {
     pos = 2;
   }
 
-  // "test.txt" entry
-  if (pos == 2) {
-    if (!dir_emit(
-            ctx, NIFS_TESTFILE_NAME, strlen(NIFS_TESTFILE_NAME), NIFS_TESTFILE_INODE, DT_REG
-        )) {
-      return 0;
-    }
-    ctx->pos = 3;
-    pos = 3;
-  }
-
   // List all created files
   list_for_each_entry(file_entry, &nifs_file_list, list) {
-    if (pos == 3) {
+    if (pos == 2) {
       if (!dir_emit(
               ctx, file_entry->name, strlen(file_entry->name), file_entry->inode_number, DT_REG
           )) {
         return 0;
       }
-      ctx->pos = 4;
-      pos = 4;
+      ctx->pos = 3;
+      pos = 3;
     }
   }
 
@@ -343,12 +322,6 @@ static struct dentry* nifs_lookup(
   struct nifs_file_entry* file_entry;
 
   if (root == NIFS_ROOT_INODE) {
-    if (!strcmp(name, NIFS_TESTFILE_NAME)) {
-      struct inode* inode = nifs_get_inode(parent_inode->i_sb, NULL, S_IFREG, NIFS_TESTFILE_INODE);
-      d_add(child_dentry, inode);
-      return NULL;
-    }
-
     if (!strcmp(name, NIFS_DIR_NAME)) {
       struct inode* inode = nifs_get_inode(parent_inode->i_sb, NULL, S_IFDIR, NIFS_DIR_INODE);
       d_add(child_dentry, inode);
