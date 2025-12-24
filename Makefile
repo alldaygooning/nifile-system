@@ -1,4 +1,5 @@
-obj-m += source/nifs.o 
+obj-m += nifs.o
+nifs-objs := source/nifs.o source/nifs_utils.o
 
 PWD := $(shell pwd)
 KDIR := /lib/modules/$(shell uname -r)/build

@@ -1,3 +1,3 @@
 #!/bin/bash
-insmod source/nifs.ko
+insmod nifs.ko
 dmesg | tail -2
