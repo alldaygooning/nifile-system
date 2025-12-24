@@ -35,9 +35,9 @@ static int nifs_unlink(struct inode* parent_inode, struct dentry* child_dentry);
 
 static int nifs_iterate(struct file* filp, struct dir_context* ctx);
 
-static ssize_t nifs_read(struct file* filp, char __user* buf, size_t len, loff_t* pos);
+static ssize_t nifs_read(struct file* filp, char __user* buffer, size_t len, loff_t* offset);
 
-static ssize_t nifs_write(struct file* filp, const char __user* buf, size_t len, loff_t* pos);
+static ssize_t nifs_write(struct file* filp, const char __user* buffer, size_t len, loff_t* offset);
 
 struct inode_operations nifs_inode_ops = {
     .lookup = nifs_lookup,
@@ -220,22 +220,22 @@ static void nifs_free_file_data(struct nifs_file_data* fd) {
 
 // ====== FILE OPERATIONS ======
 
-static ssize_t nifs_read(struct file* filp, char __user* buf, size_t len, loff_t* pos) {
+static ssize_t nifs_read(struct file* filp, char __user* buffer, size_t len, loff_t* offset) {
   struct inode* inode = file_inode(filp);
   struct nifs_file_entry* entry;
 
   list_for_each_entry(entry, &nifs_file_list, list) {
     if (entry->inode_number == inode->i_ino) {
-      if (*pos >= entry->data->size) {
+      if (*offset >= entry->data->size) {
         return 0;  // EOF
       }
 
-      size_t to_read = min(len, entry->data->size - *pos);
-      if (copy_to_user(buf, entry->data->data + *pos, to_read)) {
+      size_t to_read = min(len, entry->data->size - *offset);
+      if (copy_to_user(buffer, entry->data->data + *offset, to_read)) {
         return -EFAULT;
       }
 
-      *pos += to_read;
+      *offset += to_read;
       return to_read;
     }
   }
@@ -243,11 +243,13 @@ static ssize_t nifs_read(struct file* filp, char __user* buf, size_t len, loff_t
   return -ENOENT;
 }
 
-static ssize_t nifs_write(struct file* filp, const char __user* buf, size_t len, loff_t* ppos) {
+static ssize_t nifs_write(
+    struct file* filp, const char __user* buffer, size_t len, loff_t* offset
+) {
   struct inode* inode = file_inode(filp);
   struct nifs_file_entry* entry;
   int ret;
-  loff_t pos = *ppos;
+  loff_t pos = *offset;
 
   list_for_each_entry(entry, &nifs_file_list, list) {
     if (entry->inode_number == inode->i_ino) {
@@ -262,11 +264,11 @@ static ssize_t nifs_write(struct file* filp, const char __user* buf, size_t len,
         return ret;
       }
 
-      if (copy_from_user(entry->data->data + pos, buf, len)) {
+      if (copy_from_user(entry->data->data + pos, buffer, len)) {
         return -EFAULT;
       }
 
-      *ppos = pos + len;
+      *offset = pos + len;
       return (ssize_t)len;
     }
   }
