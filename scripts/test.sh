@@ -273,3 +273,58 @@ else
     echo "FAIL: Setup for non-empty dir test failed"
     exit 1
 fi
+
+# Test 21: Create hard link
+echo ""
+echo "21. Create hard link"
+echo "hello" > "$MOUNT/file1"
+if ln "$MOUNT/file1" "$MOUNT/file3"; then
+    echo "SUCCESS: Hard link created"
+else
+    echo "FAIL: ln returned $?"
+    exit 1
+fi
+
+# Test 22: Verify same content
+echo ""
+echo "22. Verify same content"
+if [ "$(cat "$MOUNT/file1")" = "hello" ] && [ "$(cat "$MOUNT/file3")" = "hello" ]; then
+    echo "SUCCESS: Both files have same content"
+else
+    echo "FAIL: Content mismatch"
+    exit 1
+fi
+
+# Test 23: Modify original, check link
+echo ""
+echo "23. Modify original, check link"
+echo "modified" > "$MOUNT/file1"
+if [ "$(cat "$MOUNT/file3")" = "modified" ]; then
+    echo "SUCCESS: Link sees changes"
+else
+    echo "FAIL: Link doesn't see changes"
+    exit 1
+fi
+
+# Test 24: Remove original, link should work
+echo ""
+echo "24. Remove original, link should work"
+rm "$MOUNT/file1"
+if [ -f "$MOUNT/file3" ] && [ "$(cat "$MOUNT/file3")" = "modified" ]; then
+    echo "SUCCESS: Link works after removing original"
+else
+    echo "FAIL: Link broken"
+    exit 1
+fi
+
+# Test 25: Can't hardlink directory
+echo ""
+echo "25. Can't hardlink directory"
+mkdir "$MOUNT/testdir"
+if ln "$MOUNT/testdir" "$MOUNT/dirlink" 2>/dev/null; then
+    echo "FAIL: Should reject directory hardlink"
+    exit 1
+else
+    echo "SUCCESS: Directory hardlink rejected"
+    rm -rf "$MOUNT/testdir"
+fi

@@ -36,6 +36,10 @@ static struct dentry* nifs_mkdir(
 
 static int nifs_rmdir(struct inode* parent_inode, struct dentry* child_dentry);
 
+static int nifs_link(
+    struct dentry* old_dentry, struct inode* parent_dir, struct dentry* new_dentry
+);
+
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wincompatible-pointer-types"
 struct inode_operations nifs_inode_ops = {
@@ -44,6 +48,7 @@ struct inode_operations nifs_inode_ops = {
     .unlink = nifs_unlink,
     .mkdir = nifs_mkdir,
     .rmdir = nifs_rmdir,
+    .link = nifs_link,
 };
 #pragma clang diagnostic pop
 
@@ -144,6 +149,10 @@ static int nifs_create(
     return -ENOMEM;
   }
 
+  if (S_ISREG(mode)) {
+    set_nlink(inode, 1);
+  }
+
   inode->i_op = &nifs_inode_ops;
   inode->i_fop = &nifs_file_operations;
 
@@ -158,24 +167,48 @@ static int nifs_create(
 static int nifs_unlink(struct inode* parent_inode, struct dentry* child_dentry) {
   const char* name = child_dentry->d_name.name;
   struct nifs_dir_entry* parent_dir = nifs_find_directory(parent_inode->i_ino);
+  struct inode* target_inode = d_inode(child_dentry);
 
-  if (!parent_dir)
+  if (!parent_dir) {
     return -ENOENT;
+  }
 
   struct nifs_file_entry* file = nifs_find_file_in_dir(parent_dir, name);
-  if (!file)
+  if (!file) {
     return -ENOENT;
+  }
 
-  LOG("Removing file: %s (inode %lu)\n", name, file->inode_number);
+  LOG("Removing file: %s (inode %lu, current links: %u)\n",
+      name,
+      file->inode_number,
+      target_inode->i_nlink);
 
   list_del(&file->parent_list);
   list_del(&file->global_list);
 
-  nifs_free_file_data(file->data);
+  int remaining_entries = 0;
+  struct nifs_file_entry* entry;
+  list_for_each_entry(entry, &nifs_files, global_list) {
+    if (entry->inode_number == file->inode_number) {
+      remaining_entries++;
+    }
+  }
+
+  LOG("Remaining entries for inode %lu: %d\n", file->inode_number, remaining_entries);
+
+  if (remaining_entries == 0) {
+    nifs_free_file_data(file->data);
+    LOG("Freed file data for inode %lu\n", file->inode_number);
+  }
+
   kfree(file->name);
   kfree(file);
+
+  drop_nlink(target_inode);
+
   return 0;
 }
+
 // ====== =============== ======
 
 // ====== DIR MANAGEMENT ======
@@ -375,6 +408,86 @@ static ssize_t nifs_write(
   }
 
   return -ENOENT;
+}
+
+static int nifs_link(
+    struct dentry* old_dentry, struct inode* parent_dir, struct dentry* new_dentry
+) {
+  const char* new_name = new_dentry->d_name.name;
+  struct inode* target_inode = d_inode(old_dentry);
+  struct nifs_dir_entry* parent_dir_entry;
+
+  LOG("Creating hard link: %s -> %s (inode %lu)\n",
+      new_name,
+      old_dentry->d_name.name,
+      target_inode->i_ino);
+
+  struct nifs_file_entry* source_entry = NULL;
+  struct nifs_file_entry* entry;
+
+  list_for_each_entry(entry, &nifs_files, global_list) {
+    if (entry->inode_number == target_inode->i_ino) {
+      source_entry = entry;
+      break;
+    }
+  }
+
+  if (!source_entry) {
+    return -ENOENT;
+  }
+
+  if (S_ISDIR(target_inode->i_mode)) {
+    return -EPERM;
+  }
+
+  parent_dir_entry = nifs_find_directory(parent_dir->i_ino);
+  if (!parent_dir_entry) {
+    return -ENOENT;
+  }
+
+  if (nifs_find_file_in_dir(parent_dir_entry, new_name) ||
+      nifs_find_subdir(parent_dir_entry, new_name)) {
+    return -EEXIST;
+  }
+
+  struct nifs_file_entry* new_entry = kmalloc(sizeof(struct nifs_file_entry), GFP_KERNEL);
+  if (!new_entry) {
+    return -ENOMEM;
+  }
+
+  new_entry->name = kmalloc(strlen(new_name) + 1, GFP_KERNEL);
+  if (!new_entry->name) {
+    kfree(new_entry);
+    return -ENOMEM;
+  }
+  strcpy(new_entry->name, new_name);
+
+  // 6. Set new entry's data pointer to the source entry's data
+  new_entry->data = source_entry->data;
+
+  // 7. Set new entry's inode_number to the source's inode_number
+  new_entry->inode_number = source_entry->inode_number;
+  new_entry->parent_inode = parent_dir->i_ino;
+
+  INIT_LIST_HEAD(&new_entry->parent_list);
+  INIT_LIST_HEAD(&new_entry->global_list);
+
+  // 8. Add to parent directory and global list
+  list_add_tail(&new_entry->parent_list, &parent_dir_entry->files);
+  list_add_tail(&new_entry->global_list, &nifs_files);
+
+  // 9. Increment the inode's i_nlink
+  inc_nlink(target_inode);
+
+  // 10. Link the dentry to the existing inode
+  d_instantiate(new_dentry, igrab(target_inode));
+
+  LOG("Hard link created: %s -> inode %lu (link count: %u)\n",
+      new_name,
+      target_inode->i_ino,
+      target_inode->i_nlink);
+
+  return 0;
 }
 
 // ====== =============== ======
