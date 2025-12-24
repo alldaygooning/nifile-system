@@ -243,25 +243,31 @@ static ssize_t nifs_read(struct file* filp, char __user* buf, size_t len, loff_t
   return -ENOENT;
 }
 
-static ssize_t nifs_write(struct file* filp, const char __user* buf, size_t len, loff_t* pos) {
+static ssize_t nifs_write(struct file* filp, const char __user* buf, size_t len, loff_t* ppos) {
   struct inode* inode = file_inode(filp);
   struct nifs_file_entry* entry;
   int ret;
+  loff_t pos = *ppos;
 
   list_for_each_entry(entry, &nifs_file_list, list) {
     if (entry->inode_number == inode->i_ino) {
-      size_t new_size = *pos + len;
+      if (filp->f_flags & O_APPEND) {
+        pos = entry->data->size;
+      }
+
+      size_t new_size = pos + len;
 
       ret = nifs_resize_file_data(entry->data, new_size);
-      if (ret)
+      if (ret) {
         return ret;
+      }
 
-      if (copy_from_user(entry->data->data + *pos, buf, len)) {
+      if (copy_from_user(entry->data->data + pos, buf, len)) {
         return -EFAULT;
       }
 
-      *pos += len;
-      return len;
+      *ppos = pos + len;
+      return (ssize_t)len;
     }
   }
 
